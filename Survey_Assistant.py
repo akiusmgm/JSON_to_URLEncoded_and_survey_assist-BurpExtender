@@ -1,24 +1,23 @@
 # This Python file uses the following encoding: utf-8
 
 # 機能：
-# 1. URL、メソッド、パラメータ数　を、EXCELに貼り付けられる形式(TSV)でコピー
-# 2. パラメータの差分を表示
-# 3. JSON 形式のbodyを、x-www-form-urlencoded 形式に整形する。（CSRF検証用）
+# ・URL、メソッド、パラメータ数　を、EXCELに貼り付けられる形式(TSV)でコピー
+# ・パラメータの差分を表示
+# ・JSON 形式のbodyを、x-www-form-urlencoded 形式に整形する。（CSRF検証用。変換機能が2に含まれるため、ついでに追加）
 
 # リクエストの右クリックメニューに、
-# 1. Extensions> Survey Assistant> Copy URL etc.  
-#     URL、メソッド、パラメータ数　を、EXCELに貼り付けられる形式(TSV)でコピー
-# 2. Extensions> Survey Assistant> Diff Params  
-#     Extenderタブ内、本Extenderの「Output」に、前回実行時のリクエストとの、パラメータの差分(unified_diff)を表示する。
-# 3. Extensions> Survey Assistant> JSON to URLEncoded  
-#     Repeater あたりにて、JSON 形式のbodyを、x-www-form-urlencoded 形式に整形する。      
-#     （文字列以外のvalueも無理やり文字列にして変換するため、null が"None"、trueが"True"になるなどする。）
+# 1. Extensions> Survey Assistant> Copy URL etc.
+# 2. Extensions> Survey Assistant> Diff Params
+# 3. Extensions> Survey Assistant> JSON to URLEncoded
 # が追加される
 
-# ver.20211019
-# 一部、日本語に対応。
-# 機能3（jsonパラメータをURLEncodedに整形）にて、日本語に対応。
-# パラメータ差分表示では、文字コード（shift-jis）を表示するようにした。（現在の出力箇所へのマルチバイト文字の表示方法が不明なため。）
+# 1.:URL、メソッド、パラメータ数　を、EXCELに貼り付けられる形式(TSV)でコピー
+
+# 2.:Extenderタブ内、本Extenderの「Output」に、前回実行時のリクエストとの、パラメータのdiff を表示する。
+
+# 3. Repeater あたりにて、JSON 形式のbodyを、x-www-form-urlencoded 形式に整形する。
+# （文字列以外のvalueも無理やり文字列にして変換するため、null が"None"、trueが"True"になるなどする。）
+
 # ver.20211016
 # jsonに対応。
 # ついでに、CSRF検証で使えるよう、jsonパラメータをURLEncodedに書き換えるメニューを追加。
@@ -38,11 +37,37 @@ from java.awt import Toolkit
 from difflib import unified_diff
 
 import json
-from jarray import array
 
 import sys
 reload(sys)
 sys.setdefaultencoding('utf-8')
+
+
+def get_json_params(json):
+    params = {}
+
+    def fn(params, _prefix, _data):
+        if type(_data) is dict:
+            for key, value in _data.items():
+                fn(params, _prefix + "[" + key + "]", value)
+
+        elif type(_data) is list:
+            for i, value in enumerate(_data):
+                fn(params, _prefix + "[" + str(i) + "]", value)
+
+        else:
+            params[_prefix] = _data
+
+        return
+
+    if type(json) is dict:
+        for key, value in json.items():
+            fn(params, key, value)
+    elif type(json) is list:
+        for i, value in enumerate(json):
+            fn(params, "[" + str(i) + "]", value)
+
+    return params
 
 
 class BurpExtender(IBurpExtender, IContextMenuFactory):
@@ -85,31 +110,19 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             req = message.getRequest()
             requestInfo = self.helpers.analyzeRequest(
                 message.getHttpService(), req)
-            headers = requestInfo.getHeaders()
-            headersArray = list(headers)
 
             contentType = requestInfo.getContentType()
             if contentType != requestInfo.CONTENT_TYPE_JSON:
                 continue
 
-            for i, h in enumerate(headersArray):
-                if h.lower().find("content-type:") == 0:
-                    headersArray.pop(i)
-            headersArray.append(
-                "Content-Type: application/x-www-form-urlencoded")
-
             offset = requestInfo.getBodyOffset()
-
-            json_dict = json.loads(bytes_to_string_esc_shift_jis(req[offset:]))
+            json_dict = json.loads(self.helpers.bytesToString(req[offset:]))
             params = get_json_params(json_dict)
 
-            body = "&".join([key+"="+self.helpers.urlEncode(str(value))
-                            for key, value in sorted(params.items())])
+            body="&".join([key+"="+self.helpers.urlEncode(str(value)) for key,value in sorted(params.items())])
             # self.stdout.println(body)
 
-            body_bytes = array(string_to_bytes_unesc_shift_jis(body), 'b')
-            out_req = self.helpers.buildHttpMessage(headersArray, body_bytes)
-            message.setRequest(out_req)
+            message.setRequest(req[:offset]+self.helpers.stringToBytes(body))
 
         return
 
@@ -131,7 +144,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
 
     def diff_params(self, e):
         for message in self.selected_message:
-            req = message.getRequest()
+            req=message.getRequest()
             requestInfo = self.helpers.analyzeRequest(
                 message.getHttpService(), req)
 
@@ -152,109 +165,22 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             if is_json:
                 keys_in_json = []
                 offset = requestInfo.getBodyOffset()
-                json_dict = json.loads(
-                    bytes_to_string_esc_shift_jis(req[offset:]))
+                json_dict = json.loads(self.helpers.bytesToString(req[offset:]))
                 params = get_json_params(json_dict)
                 for key in params.keys():
                     keys_in_json.append(key)
                 keys_in_json.sort()
                 keys += keys_in_json
 
-            self.stdout.println(
-                "\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\")
-            is_diff = False
-            out = []
+            self.stdout.println("\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\")
+            is_diff=False
             for line in unified_diff(self.pre_keys, keys, fromfile='before', tofile='after', n=999):
-                is_diff = True
+                is_diff=True
                 self.stdout.println(line)
-
             if not is_diff:
                 self.stdout.println("No difference in param names")
+
             self.stdout.println("//////////////////////////////")
             self.pre_keys = keys
 
         return
-
-
-def bytes_to_string_esc_shift_jis(_bytes):
-    chr_array = []
-    esc_flg = False
-    for code in _bytes:
-        code %= 0x100
-
-        c = ""
-        if esc_flg or (0x80 <= code and 0xa0 > code) or (0xe0 <= code):
-            c = "\\x"+hex(code)[2:]
-            esc_flg = not esc_flg
-        elif 0x80 <= code:
-            c = "\\x"+hex(code)[2:]
-        else:
-            c = chr(code)
-            if c == "\\":
-                c = "\\\\"
-        chr_array.append(c)
-    out = "".join(chr_array)
-
-    return out.replace("\\", "\\\\")
-
-
-def string_to_bytes_unesc_shift_jis(_str):
-    bytes_array = []
-    esc_count = 0
-    backslash = False
-    code = ""
-    for c in _str:
-        if backslash:
-            if c == "\\":
-                bytes_array.append(ord("\\"))
-            elif c == "x":
-                esc_count = 2
-            backslash = False
-
-        elif esc_count:
-            code += c
-            esc_count -= 1
-            if not esc_count:
-                bytes_array.append(uchar_to_char(int(code, 16)))
-                code = ""
-
-        else:
-            if c == "\\":
-                backslash = True
-            else:
-                bytes_array.append(uchar_to_char(ord(c)))
-
-    return bytes_array
-
-
-def get_json_params(json):
-    params = {}
-
-    def fn(params, _prefix, _data):
-        if type(_data) is dict:
-            for key, value in _data.items():
-                fn(params, _prefix + "[" + key + "]", value)
-
-        elif type(_data) is list:
-            for i, value in enumerate(_data):
-                fn(params, _prefix + "[" + str(i) + "]", value)
-
-        else:
-            params[_prefix] = _data
-
-        return
-
-    if type(json) is dict:
-        for key, value in json.items():
-            fn(params, key, value)
-    elif type(json) is list:
-        for i, value in enumerate(json):
-            fn(params, "[" + str(i) + "]", value)
-
-    return params
-
-
-def uchar_to_char(c):
-    if c >= 0x80:
-        c -= 0x100
-    return c
