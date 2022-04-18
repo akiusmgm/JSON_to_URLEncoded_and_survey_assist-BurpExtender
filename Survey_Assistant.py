@@ -130,6 +130,7 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             num = sum(int(param.PARAM_COOKIE != param.getType())
                       for param in params)
 
+            # port 80 443 削除
             scheme=re.search("^(\w+)://.*",url).group(1)
             port=int(re.search("^\w+://[^:/]+:(\d+)/.*$",url).group(1))
             if scheme in schemes and schemes[scheme]==port:
@@ -138,7 +139,18 @@ class BurpExtender(IBurpExtender, IContextMenuFactory):
             #     self.stdout.println("port: "+str(port))
             # self.stdout.println("url: "+url)
 
-            out = url+"\t"+method+"\t"+str(num)
+            # param value　削除
+            url2=url.split("#")[0].split("?")[0]
+            keys=[]
+            for param in params:
+                if param.PARAM_URL == param.getType():
+                    keys.append(param.getName()+"=")
+            
+            if keys:
+                url2+="?"+"&".join(keys)
+
+            # clipboad へ出力
+            out = url2+"\t"+method+"\t"+str(num)
             clipboard = Toolkit.getDefaultToolkit().getSystemClipboard()
             clipboard.setContents(StringSelection(out), None)
 
